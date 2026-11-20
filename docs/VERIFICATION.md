@@ -1,6 +1,50 @@
 # Verification Plan — iris-supabase-fdw
 
-## Phase 1: Gateway Unit Tests
+> **Phase 1 status: COMPLETED (16/16 passed)** — verified 2026-11-20 against
+> IRIS Community 2026.3.0AI (container `iris-fdw-test` on 42.80.244.26, port 52873).
+
+## Phase 1: Gateway Unit Tests — RESULTS
+
+| # | Test | Result |
+|---|------|--------|
+| 1 | GET /ping | ✅ `{"status":"ok","version":"1.0.0","server":"IRIS 2026.3.0AI"...}` |
+| 2 | /query SELECT literals | ✅ `{"rows":[{"test_val":1,"greeting":"hello"}]}` |
+| 3 | /query full table (7 types) | ✅ numbers as JSON numbers, dates as ODBC strings |
+| 4 | /query WHERE pushdown | ✅ correct row subset |
+| 5 | /query offset+max_rows | ✅ `has_more=1`, correct page |
+| 6 | /exec INSERT (incl. DATE) | ✅ `{"rows_affected":1}` |
+| 7 | /exec UPDATE | ✅ `{"rows_affected":1}` |
+| 8 | verify INSERT+UPDATE | ✅ data visible via /query |
+| 9 | /exec DELETE | ✅ `{"rows_affected":1}` |
+| 10 | /schema/SQLUser | ✅ full column metadata (7 columns) |
+| 11 | SECURITY: /exec rejects SELECT | ✅ error message |
+| 12 | SECURITY: /query rejects DELETE | ✅ error message |
+| 13 | ERROR: bad table name | ✅ `SQLCODE -30` surfaced clearly |
+| 14 | /query AND + LIKE | ✅ combined conditions work |
+| 15 | /query COUNT(*) | ✅ aggregate returns numeric |
+| 16 | /query DATE comparison | ✅ `BirthDate > '1990-01-01'` works |
+
+### Test environment setup notes
+
+- IRIS 2026.3 container requires password reset on first use:
+  run `iris session IRIS -U %SYS` inside the container (OS auth as
+  `irisowner`), then `ALTER USER _SYSTEM IDENTIFY BY '<new-password>'`.
+- Web application `/iris-fdw/v1` must be created in the `%SYS` namespace
+  (`Security.Applications`), with `DispatchClass=IrisFdw.Gateway.Handler`,
+  `NameSpace=USER`, `AutheEnabled=32` (password auth).
+- Multi-line `If { }` blocks are not accepted by `iris session` stdin;
+  use single-line statements in setup scripts.
+
+### Known limitations found during testing
+
+- SQL NULL and empty string both serialize as `""` in JSON responses
+  (`%SQL.StatementResult` has no NULL-detection API for arbitrary queries).
+- IRIS column names are returned in the case stored in the dictionary
+  (typically uppercase); the Wasm FDW matches them case-insensitively.
+
+---
+
+## Phase 1 original test procedures (for re-runs)
 
 ### 1.1 Health Check
 ```objectscript
