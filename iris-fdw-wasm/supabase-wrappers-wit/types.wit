@@ -13,6 +13,8 @@ interface types {
         timestamp,
         timestamptz,
         json,
+        uuid,
+        other(string),
     }
 
     variant cell {
@@ -25,21 +27,28 @@ interface types {
         i64(s64),
         numeric(f64),
         %string(string),
+        // seconds since Unix epoch
         date(s64),
+        // microseconds since Unix epoch
         timestamp(s64),
         timestamptz(s64),
         json(string),
+        uuid(string),
+        other(string),
     }
 
     resource row {
         constructor();
+
         cols: func() -> list<string>;
         cells: func() -> list<option<cell>>;
+
         push: func(cell: option<cell>);
     }
 
     resource column {
         constructor(index: u32);
+
         name: func() -> string;
         num: func() -> u32;
         type-oid: func() -> type-oid;
@@ -92,6 +101,8 @@ interface types {
     variant options-type {
         server,
         table,
+        import-schema,
+        other(string),
     }
 
     resource options {
@@ -100,6 +111,20 @@ interface types {
         get: func(key: string) -> option<string>;
         require: func(key: string) -> result<string, fdw-error>;
         require-or: func(key: string, default: string) -> string;
+    }
+
+    variant import-schema-type {
+        all,
+        limit-to,
+        except,
+    }
+
+    record import-foreign-schema-stmt {
+        server-name: string,
+        remote-schema: string,
+        local-schema: string,
+        list-type: import-schema-type,
+        table-list: list<string>,
     }
 
     resource context {
@@ -115,3 +140,5 @@ interface types {
     type fdw-error = string;
     type fdw-result = result<_, fdw-error>;
 }
+
+

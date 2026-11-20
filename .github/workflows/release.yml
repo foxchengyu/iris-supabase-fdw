@@ -16,15 +16,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.97.1
           targets: wasm32-unknown-unknown
 
       - name: Install cargo-component
-        run: cargo install cargo-component --locked --version 0.13.2
+        run: cargo install cargo-component --locked --version 0.21.1
 
       - name: Build Wasm package
-        run: cargo component build --release
+        run: cargo component build --release --target wasm32-unknown-unknown
         working-directory: iris-fdw-wasm
 
       - name: Calculate checksum
@@ -32,6 +33,7 @@ jobs:
         run: |
           CHECKSUM=$(sha256sum iris-fdw-wasm/target/wasm32-unknown-unknown/release/iris_fdw.wasm | cut -d' ' -f1)
           echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+          echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Create release
         uses: softprops/action-gh-release@v1
@@ -55,7 +57,7 @@ jobs:
               options (
                 fdw_package_url '${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/iris_fdw.wasm',
                 fdw_package_name 'iris:iris-fdw',
-                fdw_package_version '${{ github.ref_name }}',
+                fdw_package_version '${{ steps.checksum.outputs.version }}',
                 fdw_package_checksum '${{ steps.checksum.outputs.checksum }}',
                 api_url 'https://your-iris-host/iris-fdw/v1',
                 username 'fdw_user',

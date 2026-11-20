@@ -8,7 +8,10 @@ use bindings::{
     exports::supabase::wrappers::routines::Guest,
     supabase::wrappers::{
         http, time,
-        types::{Cell, Context, FdwResult, OptionsType, Row, TypeOid, Value},
+        types::{
+            Cell, Context, FdwResult, ImportForeignSchemaStmt, ImportSchemaType, OptionsType, Row,
+            TypeOid, Value,
+        },
         utils,
     },
 };
@@ -29,6 +32,25 @@ struct ExecResponse {
 #[derive(Deserialize)]
 struct ErrorResponse {
     error: String,
+}
+
+// Gateway GET /schema/:name response
+#[derive(Deserialize)]
+struct SchemaResponse {
+    tables: Vec<SchemaTable>,
+}
+
+#[derive(Deserialize)]
+struct SchemaTable {
+    name: String,
+    columns: Vec<SchemaColumn>,
+}
+
+#[derive(Deserialize)]
+struct SchemaColumn {
+    name: String,
+    #[serde(rename = "type")]
+    col_type: String,
 }
 
 // ── FDW struct ────────────────────────────────────────────────────────
@@ -78,6 +100,26 @@ fn json_escape(s: &str) -> String {
 
 fn sql_escape(s: &str) -> String {
     s.replace('\'', "''")
+}
+
+// ── Helper: map IRIS SQL display type to a Postgres column type ───────
+
+fn iris_type_to_pg(iris_type: &str) -> &'static str {
+    let upper = iris_type.to_uppercase();
+    let base = upper.split('(').next().unwrap_or("").trim();
+    match base {
+        "INTEGER" => "integer",
+        "BIGINT" => "bigint",
+        "SMALLINT" | "TINYINT" => "smallint",
+        "DOUBLE" | "FLOAT" | "REAL" => "double precision",
+        "DECIMAL" | "NUMERIC" => "numeric",
+        "DATE" => "date",
+        "TIMESTAMP" | "DATETIME" => "timestamp",
+        // TIME has no Cell counterpart in the host; read it as text
+        "TIME" => "text",
+        "BOOLEAN" | "BIT" => "boolean",
+        _ => "text",
+    }
 }
 
 // ── Helper: build Basic Auth header ───────────────────────────────────
@@ -152,6 +194,41 @@ fn post_json(url: &str, auth_header: &str, body: &str) -> Result<JsonValue, Stri
     Ok(json)
 }
 
+// ── Helper: HTTP GET returning parsed JSON ─────────────────────────────
+
+fn get_json(url: &str, auth_header: &str) -> Result<JsonValue, String> {
+    let headers: Vec<(String, String)> = vec![
+        ("Accept".to_owned(), "application/json".to_owned()),
+        ("Authorization".to_owned(), auth_header.to_owned()),
+        ("User-Agent".to_owned(), "iris-fdw/0.1.0".to_owned()),
+    ];
+
+    let req = http::Request {
+        method: http::Method::Get,
+        url: url.to_owned(),
+        headers,
+        body: String::new(),
+    };
+
+    let resp = http::get(&req).map_err(|e| format!("HTTP GET failed: {}", e))?;
+
+    if resp.status_code >= 400 {
+        return Err(format!(
+            "IRIS gateway returned HTTP {}: {}",
+            resp.status_code, resp.body
+        ));
+    }
+
+    let json: JsonValue =
+        serde_json::from_str(&resp.body).map_err(|e| format!("JSON parse error: {}", e))?;
+
+    if let Some(err) = json.get("error").and_then(|e| e.as_str()) {
+        return Err(format!("IRIS gateway error: {}", err));
+    }
+
+    Ok(json)
+}
+
 // ── Helper: translate Postgres qual operator to IRIS SQL ──────────────
 
 fn translate_operator(pg_op: &str) -> Result<&str, String> {
@@ -210,6 +287,8 @@ fn cell_to_sql(val: &Value) -> Result<String, String> {
                 ))
             }
             Cell::Json(s) => Ok(format!("'{}'", sql_escape(s))),
+            // UUID and any other type are passed through as quoted literals
+            Cell::Uuid(s) | Cell::Other(s) => Ok(format!("'{}'", sql_escape(s))),
         },
         Value::Array(items) => {
             let parts: Vec<String> = items
@@ -659,6 +738,62 @@ impl Guest for IrisFdw {
     fn end_modify(_ctx: &Context) -> FdwResult {
         Ok(())
     }
+
+    // ── IMPORT FOREIGN SCHEMA support ─────────────────────────────
+
+    fn import_foreign_schema(
+        _ctx: &Context,
+        stmt: ImportForeignSchemaStmt,
+    ) -> Result<Vec<String>, String> {
+        let this = Self::this_mut();
+
+        // Fetch remote schema metadata from the gateway
+        let url = format!("{}/schema/{}", this.api_url, stmt.remote_schema);
+        let json = get_json(&url, &this.auth_header)?;
+
+        let schema: SchemaResponse = serde_json::from_value(json)
+            .map_err(|e| format!("schema response parse error: {}", e))?;
+
+        let mut ret = Vec::new();
+        for table in &schema.tables {
+            // Apply LIMIT TO / EXCEPT filters (IRIS table names are uppercase)
+            let included = match stmt.list_type {
+                ImportSchemaType::All => true,
+                ImportSchemaType::LimitTo => stmt
+                    .table_list
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(&table.name)),
+                ImportSchemaType::Except => !stmt
+                    .table_list
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(&table.name)),
+            };
+            if !included {
+                continue;
+            }
+
+            // Column names are quoted with the exact IRIS dictionary case,
+            // because IRIS quoted identifiers are case-sensitive
+            let cols = table
+                .columns
+                .iter()
+                .map(|c| format!("    \"{}\" {}", c.name, iris_type_to_pg(&c.col_type)))
+                .collect::<Vec<_>>()
+                .join(",\n");
+
+            ret.push(format!(
+                "create foreign table if not exists {}.{} (\n{}\n)\nserver {} options (object '{}.{}')",
+                stmt.local_schema,
+                table.name.to_lowercase(),
+                cols,
+                stmt.server_name,
+                stmt.remote_schema,
+                table.name,
+            ));
+        }
+
+        Ok(ret)
+    }
 }
 
 // ── Helper: convert JSON value to Cell (type-aware) ───────────────────
@@ -715,6 +850,9 @@ fn json_to_cell(val: &JsonValue, oid: &TypeOid) -> Cell {
             }
             other => Cell::Json(other.to_string()),
         },
+        // UUID and unknown types are passed through as strings
+        TypeOid::Uuid => Cell::Uuid(json_to_string(val)),
+        TypeOid::Other(_) => Cell::String(json_to_string(val)),
     }
 }
 
