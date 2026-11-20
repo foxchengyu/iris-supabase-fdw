@@ -15,7 +15,6 @@ lto = true
 wit-bindgen-rt = "0.26.0"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-base64 = "0.22"
 
 [package.metadata.component]
 package = "iris:iris-fdw"

@@ -144,6 +144,11 @@ fn post_json(url: &str, auth_header: &str, body: &str) -> Result<JsonValue, Stri
     let json: JsonValue =
         serde_json::from_str(&resp.body).map_err(|e| format!("JSON parse error: {}", e))?;
 
+    // Gateway-level error (e.g. SQL error, permission denied)
+    if let Some(err) = json.get("error").and_then(|e| e.as_str()) {
+        return Err(format!("IRIS gateway error: {}", err));
+    }
+
     Ok(json)
 }
 
@@ -474,15 +479,19 @@ impl Guest for IrisFdw {
                         })
                     });
                 let cell = match val {
-                    Some(v) => Some(json_to_cell(v)),
+                    Some(JsonValue::Null) => None, // explicit JSON null -> SQL NULL
+                    Some(v) => Some(json_to_cell(v, &tgt_col.type_oid())),
                     None => None, // column not in JSON, push NULL
                 };
                 row.push(cell.as_ref());
             }
         } else {
             // Single value or unexpected format
-            let cell = Some(json_to_cell(src_row));
-            for _ in columns.iter() {
+            for tgt_col in columns.iter() {
+                let cell = match src_row {
+                    JsonValue::Null => None,
+                    v => Some(json_to_cell(v, &tgt_col.type_oid())),
+                };
                 row.push(cell.as_ref());
             }
         }
@@ -652,24 +661,162 @@ impl Guest for IrisFdw {
     }
 }
 
-// ── Helper: convert JSON value to Cell ────────────────────────────────
+// ── Helper: convert JSON value to Cell (type-aware) ───────────────────
+//
+// Host conventions (wrappers/src/fdw/wasm_fdw/bindings/v1.rs):
+//   Cell::Date        = seconds since Unix epoch (1970-01-01)
+//   Cell::Timestamp   = microseconds since Unix epoch
+//   Cell::Timestamptz = microseconds since Unix epoch
+//   Cell::Numeric     = f64
+//   Cell::Json        = valid JSON text (host runs serde_json::from_str)
 
-fn json_to_cell(val: &JsonValue) -> Cell {
+fn json_to_cell(val: &JsonValue, oid: &TypeOid) -> Cell {
+    match oid {
+        TypeOid::Bool => Cell::Bool(match val {
+            JsonValue::Bool(b) => *b,
+            JsonValue::Number(n) => n.as_i64().map(|v| v != 0).unwrap_or(false),
+            JsonValue::String(s) => {
+                matches!(s.to_lowercase().as_str(), "1" | "t" | "true" | "yes" | "on")
+            }
+            _ => false,
+        }),
+        TypeOid::I8 => Cell::I8(json_to_i64(val) as i8),
+        TypeOid::I16 => Cell::I16(json_to_i64(val) as i16),
+        TypeOid::I32 => Cell::I32(json_to_i64(val) as i32),
+        TypeOid::I64 => Cell::I64(json_to_i64(val)),
+        TypeOid::F32 => Cell::F32(json_to_f64(val) as f32),
+        TypeOid::F64 => Cell::F64(json_to_f64(val)),
+        TypeOid::Numeric => Cell::Numeric(json_to_f64(val)),
+        TypeOid::String => Cell::String(json_to_string(val)),
+        TypeOid::Date => Cell::Date(match val {
+            // IRIS gateway returns ODBC date string "YYYY-MM-DD"
+            JsonValue::String(s) => parse_date_days(s).map(|d| d * 86400).unwrap_or(0),
+            JsonValue::Number(n) => n.as_i64().unwrap_or(0),
+            _ => 0,
+        }),
+        TypeOid::Timestamp => Cell::Timestamp(match val {
+            JsonValue::String(s) => parse_timestamp_usecs(s).unwrap_or(0),
+            JsonValue::Number(n) => n.as_i64().unwrap_or(0),
+            _ => 0,
+        }),
+        TypeOid::Timestamptz => Cell::Timestamptz(match val {
+            JsonValue::String(s) => parse_timestamp_usecs(s).unwrap_or(0),
+            JsonValue::Number(n) => n.as_i64().unwrap_or(0),
+            _ => 0,
+        }),
+        TypeOid::Json => match val {
+            JsonValue::String(s) => {
+                // Host parses this as JSON; wrap plain strings as JSON strings
+                if serde_json::from_str::<JsonValue>(s).is_ok() {
+                    Cell::Json(s.clone())
+                } else {
+                    Cell::Json(format!("\"{}\"", json_escape(s)))
+                }
+            }
+            other => Cell::Json(other.to_string()),
+        },
+    }
+}
+
+fn json_to_i64(val: &JsonValue) -> i64 {
     match val {
-        JsonValue::Null => Cell::String("".to_string()),
-        JsonValue::Bool(b) => Cell::Bool(*b),
-        JsonValue::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Cell::I64(i)
-            } else if let Some(f) = n.as_f64() {
-                Cell::Numeric(f)
+        JsonValue::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_f64().map(|f| f as i64))
+            .unwrap_or(0),
+        JsonValue::String(s) => s.trim().parse::<i64>().unwrap_or(0),
+        JsonValue::Bool(b) => i64::from(*b),
+        _ => 0,
+    }
+}
+
+fn json_to_f64(val: &JsonValue) -> f64 {
+    match val {
+        JsonValue::Number(n) => n.as_f64().unwrap_or(0.0),
+        JsonValue::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
+        JsonValue::Bool(b) => {
+            if *b {
+                1.0
             } else {
-                Cell::String(n.to_string())
+                0.0
             }
         }
-        JsonValue::String(s) => Cell::String(s.clone()),
-        JsonValue::Array(_) | JsonValue::Object(_) => Cell::Json(val.to_string()),
+        _ => 0.0,
     }
+}
+
+fn json_to_string(val: &JsonValue) -> String {
+    match val {
+        JsonValue::String(s) => s.clone(),
+        JsonValue::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// Parse "YYYY-MM-DD" to days since Unix epoch (1970-01-01).
+fn parse_date_days(s: &str) -> Option<i64> {
+    let date_part = s.split([' ', 'T']).next()?;
+    let mut it = date_part.split('-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: i64 = it.next()?.parse().ok()?;
+    let d: i64 = it.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    Some(days_from_civil(y, m, d))
+}
+
+/// Parse "YYYY-MM-DD[ HH:MM[:SS[.ffffff]]]" to microseconds since Unix epoch.
+/// IRIS ODBC timestamps are in server local time; no timezone conversion.
+fn parse_timestamp_usecs(s: &str) -> Option<i64> {
+    let mut parts = s.trim().splitn(2, [' ', 'T']);
+    let date_part = parts.next()?;
+    let time_part = parts.next().unwrap_or("00:00:00");
+
+    let mut di = date_part.split('-');
+    let y: i64 = di.next()?.parse().ok()?;
+    let m: i64 = di.next()?.parse().ok()?;
+    let d: i64 = di.next()?.parse().ok()?;
+
+    // Split off fractional seconds (ignore any trailing timezone designator)
+    let time_part = time_part.trim_end_matches('Z');
+    let (hms, micros) = match time_part.split_once('.') {
+        Some((hms, frac)) => {
+            let digits: String = frac.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let mut us = digits.parse::<i64>().unwrap_or(0);
+            for _ in digits.len()..6 {
+                us *= 10;
+            }
+            (hms, us)
+        }
+        None => (time_part, 0),
+    };
+
+    let mut ti = hms.split(':');
+    let hh: i64 = ti.next().unwrap_or("0").parse().ok()?;
+    let mi: i64 = ti.next().unwrap_or("0").parse().ok()?;
+    let ss: i64 = ti.next().unwrap_or("0").parse().ok()?;
+
+    let days = days_from_civil(y, m, d);
+    Some(
+        days * 86_400_000_000
+            + hh * 3_600_000_000
+            + mi * 60_000_000
+            + ss * 1_000_000
+            + micros,
+    )
+}
+
+/// Days-from-civil algorithm (proleptic Gregorian calendar).
+/// Returns days since 1970-01-01.
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let mp = (m + 9) % 12; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + d - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146097 + doe - 719468
 }
 
 bindings::export!(IrisFdw with_types_in bindings);
