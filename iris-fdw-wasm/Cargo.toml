@@ -19,6 +19,8 @@ serde = { version = "1.0", features = ["derive"] }
 [package.metadata.component]
 package = "iris:iris-fdw"
 
+[package.metadata.component.dependencies]
+
 [package.metadata.component.target]
 path = "wit"
 

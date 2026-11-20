@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build:
@@ -20,13 +21,29 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
+          components: rustfmt
 
       - name: Install cargo-component
         run: cargo install cargo-component --locked --version 0.21.1
 
       - name: Build Wasm package
-        run: cargo component build --release --target wasm32-unknown-unknown
+        run: cargo component build --release --target wasm32-unknown-unknown 2>&1 | tee build.log
         working-directory: iris-fdw-wasm
+
+      - name: Publish build log on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '(no build.log found)';
+            try { log = fs.readFileSync('iris-fdw-wasm/build.log', 'utf8'); } catch (e) {}
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[CI debug] build log ${context.ref}`,
+              body: '```\n' + log.slice(-50000) + '\n```'
+            });
 
       - name: Calculate checksum
         id: checksum
