@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Export generator="IRIS" version="26">
+  <Document name="iris-fdw-gateway.ZPM">
+    <Module>
+      <Name>iris-fdw-gateway</Name>
+      <Version>1.0.0</Version>
+      <Description>
+        REST gateway for InterSystems IRIS that serves as backend for 
+        the Supabase Wasm Foreign Data Wrapper (iris_fdw).
+        
+        Provides endpoints:
+          GET  /ping        - health check
+          POST /query       - execute SELECT, return JSON
+          POST /exec        - execute INSERT/UPDATE/DELETE
+          GET  /schema/:name - get table metadata
+      </Description>
+      <Author>iris-fdw-contributors</Author>
+      <Keywords>supabase fdw wasm rest sql</Keywords>
+      
+      <Dependencies />
+      
+      <Sources>
+        <Source Dir="src" />
+      </Sources>
+      
+      <CSPApplication
+        Url="/iris-fdw/v1"
+        DispatchClass="IrisFdw.Gateway.Handler"
+        Namespace="%SYS"
+        Recurse="1"
+        CookiePath="/iris-fdw"
+        GroupById="%Service_Login"
+        AuthMethods="64"
+        />
+      
+    </Module>
+  </Document>
+</Export>

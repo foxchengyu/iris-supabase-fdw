@@ -1,0 +1,69 @@
+name: Build and Release Wasm FDW
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install cargo-component
+        run: cargo install cargo-component --locked --version 0.13.2
+
+      - name: Build Wasm package
+        run: cargo component build --release
+        working-directory: iris-fdw-wasm
+
+      - name: Calculate checksum
+        id: checksum
+        run: |
+          CHECKSUM=$(sha256sum iris-fdw-wasm/target/wasm32-unknown-unknown/release/iris_fdw.wasm | cut -d' ' -f1)
+          echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: iris-fdw-wasm/target/wasm32-unknown-unknown/release/iris_fdw.wasm
+          body: |
+            ## iris_fdw.wasm v${{ github.ref_name }}
+
+            InterSystems IRIS Foreign Data Wrapper for Supabase.
+
+            ### Installation
+
+            ```sql
+            create extension if not exists wrappers with schema extensions;
+            create foreign data wrapper wasm_wrapper
+              handler wasm_fdw_handler
+              validator wasm_fdw_validator;
+
+            create server iris_server
+              foreign data wrapper wasm_wrapper
+              options (
+                fdw_package_url '${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/iris_fdw.wasm',
+                fdw_package_name 'iris:iris-fdw',
+                fdw_package_version '${{ github.ref_name }}',
+                fdw_package_checksum '${{ steps.checksum.outputs.checksum }}',
+                api_url 'https://your-iris-host/iris-fdw/v1',
+                username 'fdw_user',
+                password_id '<vault-secret-id>'
+              );
+
+            create schema if not exists iris;
+            import foreign schema "MySchema" from server iris_server into iris;
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
