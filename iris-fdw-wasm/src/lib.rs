@@ -368,7 +368,7 @@ impl Guest for IrisFdw {
         Self::init_instance();
         let this = Self::this_mut();
 
-        let opts = ctx.get_options(OptionsType::Server);
+        let opts = ctx.get_options(&OptionsType::Server);
         this.api_url = opts.require_or("api_url", "http://localhost:52773/iris-fdw/v1");
 
         // Read credentials
@@ -401,7 +401,7 @@ impl Guest for IrisFdw {
     fn begin_scan(ctx: &Context) -> FdwResult {
         let this = Self::this_mut();
 
-        let table_opts = ctx.get_options(OptionsType::Table);
+        let table_opts = ctx.get_options(&OptionsType::Table);
         let object = table_opts.require("object")?;
 
         // Build SELECT column list from target columns
@@ -603,7 +603,7 @@ impl Guest for IrisFdw {
 
     fn insert(ctx: &Context, row: &Row) -> FdwResult {
         let this = Self::this_mut();
-        let table_opts = ctx.get_options(OptionsType::Table);
+        let table_opts = ctx.get_options(&OptionsType::Table);
         let object = table_opts.require("object")?;
 
         let columns = ctx.get_columns();
@@ -641,7 +641,7 @@ impl Guest for IrisFdw {
 
     fn update(ctx: &Context, _rowid: Cell, new_row: &Row) -> FdwResult {
         let this = Self::this_mut();
-        let table_opts = ctx.get_options(OptionsType::Table);
+        let table_opts = ctx.get_options(&OptionsType::Table);
         let object = table_opts.require("object")?;
 
         let columns = ctx.get_columns();
@@ -699,7 +699,7 @@ impl Guest for IrisFdw {
 
     fn delete(ctx: &Context, _rowid: Cell) -> FdwResult {
         let this = Self::this_mut();
-        let table_opts = ctx.get_options(OptionsType::Table);
+        let table_opts = ctx.get_options(&OptionsType::Table);
         let object = table_opts.require("object")?;
 
         // Get quals for WHERE clause

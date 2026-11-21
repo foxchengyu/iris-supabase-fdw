@@ -27,7 +27,7 @@ jobs:
         run: cargo install cargo-component --locked --version 0.21.1
 
       - name: Build Wasm package
-        run: cargo component build --release --target wasm32-unknown-unknown 2>&1 | tee build.log
+        run: set -o pipefail && cargo component build --release --target wasm32-unknown-unknown 2>&1 | tee build.log
         working-directory: iris-fdw-wasm
 
       - name: Calculate checksum
