@@ -152,6 +152,17 @@ Set resp = {}.%FromJSON(req.HttpResponse.Data)
 
 ## Phase 2: Wasm FDW Verification (requires Supabase project)
 
+> **Build verification: COMPLETED** — the Wasm component builds cleanly via
+> GitHub Actions (Rust 1.97.1 + cargo-component 0.21.1, WIT v2 interfaces) and
+> is published as a release asset:
+> https://github.com/foxchengyu/iris-supabase-fdw/releases/tag/v0.1.0
+>
+> - `iris_fdw.wasm` (303,404 bytes) validated with `wasm-tools validate`
+> - Component exports `supabase:wrappers/routines@0.2.0` (verified via
+>   `wasm-tools component wit`); imports only http/types/utils
+> - Release body contains the matching SHA-256 checksum
+>   (`10b1c9624e8cf90c1921d92b0e87b8f7600328595829076e5d09f55b40b9d0d0`)
+
 ### 2.1 Setup on Supabase
 ```sql
 -- 1. Enable Wrappers extension
@@ -166,7 +177,7 @@ create foreign data wrapper wasm_wrapper
 create server iris_server
   foreign data wrapper wasm_wrapper
   options (
-    fdw_package_url 'https://github.com/<USER>/iris-supabase-fdw/releases/download/v0.1.0/iris_fdw.wasm',
+    fdw_package_url 'https://github.com/foxchengyu/iris-supabase-fdw/releases/download/v0.1.0/iris_fdw.wasm',
     fdw_package_name 'iris:iris-fdw',
     fdw_package_version '0.1.0',
     fdw_package_checksum '<SHA256>',
