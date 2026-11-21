@@ -53,10 +53,10 @@ create foreign data wrapper wasm_wrapper
 create server iris_server
   foreign data wrapper wasm_wrapper
   options (
-    fdw_package_url 'https://github.com/<user>/iris-supabase-fdw/releases/download/v0.1.0/iris_fdw.wasm',
+    fdw_package_url 'https://github.com/foxchengyu/iris-supabase-fdw/releases/download/v0.1.0/iris_fdw.wasm',
     fdw_package_name 'iris:iris-fdw',
     fdw_package_version '0.1.0',
-    fdw_package_checksum '<checksum-from-release>',
+    fdw_package_checksum '10b1c9624e8cf90c1921d92b0e87b8f7600328595829076e5d09f55b40b9d0d0',
     api_url 'https://your-iris-host/iris-fdw/v1',
     username 'fdw_user',
     password_id '<vault-secret-id>',
@@ -116,14 +116,16 @@ delete from iris.patient where id = 99;
 
 | IRIS | Postgres |
 |---|---|
-| INTEGER | bigint |
+| INTEGER | integer |
 | BIGINT | bigint |
-| DOUBLE | double precision |
-| VARCHAR(n) | text |
+| SMALLINT / TINYINT | smallint |
+| DOUBLE / FLOAT / REAL | double precision |
+| VARCHAR(n) / CHAR(n) | text |
 | DATE | date |
 | TIMESTAMP | timestamp |
-| BOOLEAN | boolean |
-| NUMERIC | double precision |
+| TIME | text |
+| BOOLEAN / BIT | boolean |
+| NUMERIC / DECIMAL | numeric |
 
 ## 安全性
 
@@ -141,10 +143,12 @@ delete from iris.patient where id = 99;
 ```bash
 cd iris-fdw-wasm
 rustup target add wasm32-unknown-unknown
-cargo install cargo-component --locked --version 0.13.2
-cargo component build --release
+cargo install cargo-component --locked --version 0.21.1
+cargo component build --release --target wasm32-unknown-unknown
 # 输出：target/wasm32-unknown-unknown/release/iris_fdw.wasm
 ```
+
+也可以直接从 [Releases](https://github.com/foxchengyu/iris-supabase-fdw/releases) 下载预编译的二进制文件。
 
 ### IRIS 网关
 
