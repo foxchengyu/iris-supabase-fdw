@@ -30,6 +30,21 @@ jobs:
         run: cargo component build --release --target wasm32-unknown-unknown 2>&1 | tee build.log
         working-directory: iris-fdw-wasm
 
+      - name: Calculate checksum
+        id: checksum
+        run: |
+          set -o pipefail
+          {
+            echo "== wasm artifacts under repo =="
+            find . -type f -name '*.wasm' -not -path './.git/*' || true
+          } 2>&1 | tee -a iris-fdw-wasm/build.log
+          WASM=$(find . -type f -name '*.wasm' -not -path './.git/*' | head -1)
+          if [ -z "$WASM" ]; then echo "ERROR: wasm artifact not found"; exit 1; fi
+          echo "wasm_file=$WASM" >> $GITHUB_OUTPUT
+          CHECKSUM=$(sha256sum "$WASM" | cut -d' ' -f1)
+          echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+          echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
       - name: Publish build log on failure
         if: failure()
         uses: actions/github-script@v7
@@ -44,21 +59,6 @@ jobs:
               title: `[CI debug] build log ${context.ref}`,
               body: '```\n' + log.slice(-50000) + '\n```'
             });
-
-      - name: Calculate checksum
-        id: checksum
-        run: |
-          set -o pipefail
-          {
-            echo "== wasm artifacts in target =="
-            find iris-fdw-wasm/target -type f -name '*.wasm' || true
-          } 2>&1 | tee -a iris-fdw-wasm/build.log
-          WASM=$(find iris-fdw-wasm/target -type f -name '*.wasm' | head -1)
-          if [ -z "$WASM" ]; then echo "ERROR: wasm artifact not found"; exit 1; fi
-          echo "wasm_file=$WASM" >> $GITHUB_OUTPUT
-          CHECKSUM=$(sha256sum "$WASM" | cut -d' ' -f1)
-          echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
-          echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Create release
         uses: softprops/action-gh-release@v1
